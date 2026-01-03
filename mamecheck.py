@@ -55,39 +55,28 @@ PUSHOVER_TOKEN: Optional[str] = None
 PUSHOVER_USER: Optional[str] = None
 PUSHOVER_DEVICE: Optional[str] = None
 PUSHOVER_PRIORITY: int = 0
-PUSHOVER_ENABLED: bool = False
+PUSHOVER_ENABLED: bool = True
 NOTIFY_ON_UPDATE: bool = True
 NOTIFY_ON_ERROR: bool = True
+
+QB_ENABLED = False
+QB_HOST = "10.100.10.10"
+QB_PORT = 8080
+QB_USER = None
+QB_PASS = None
+QB_CATEGORY = "games"
+QB_PAUSED = False
+QB_URL_TEMPLATE = ""
 
 
 def load_config(path: str) -> None:
     """
     Load settings from config.ini.
-
-    Relevant sections/keys:
-
-        [web]
-        data_dir        = /data/arcade_app
-        lastcheck_file  = lastcheck
-        log_path        = /var/log/arcadecheck.log
-
-        [mame]
-        url             = https://pleasuredome.github.io/pleasuredome/mame/index.html
-        version_file    = mame.ver
-        label           = MAME
-        notify_on_update = true
-        notify_on_error  = true
-
-        [pushover]
-        token    = <app token>
-        user     = <user key>
-        device   =
-        priority = 0
-        enabled  = true
     """
     global MAME_URL, DATA_DIR, VERSION_FILE, LASTCHECK_FILE, LOG_PATH, MAME_LABEL
     global PUSHOVER_TOKEN, PUSHOVER_USER, PUSHOVER_DEVICE, PUSHOVER_PRIORITY
     global PUSHOVER_ENABLED, NOTIFY_ON_UPDATE, NOTIFY_ON_ERROR
+    global QB_ENABLED, QB_HOST, QB_PORT, QB_USER, QB_PASS, QB_CATEGORY, QB_PAUSED, QB_URL_TEMPLATE
 
     parser = configparser.ConfigParser()
     read_files = parser.read(path)
@@ -127,7 +116,6 @@ def load_config(path: str) -> None:
 
     if parser.has_section("qbittorrent"):
         qb = parser["qbittorrent"]
-        global QB_ENABLED, QB_HOST, QB_PORT, QB_USER, QB_PASS, QB_CATEGORY, QB_PAUSED, QB_URL_TEMPLATE
         QB_ENABLED = qb.getboolean("enabled", False)
         QB_HOST = qb.get("host", QB_HOST).strip()
         QB_PORT = qb.getint("port", QB_PORT)
