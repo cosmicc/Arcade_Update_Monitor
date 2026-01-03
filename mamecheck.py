@@ -69,6 +69,70 @@ QB_PAUSED = False
 QB_URL_TEMPLATE = ""
 
 
+def extract_magnets_from_anchor(
+    page_url: str = "https://pleasuredome.github.io/pleasuredome/mame/index.html",
+    anchor_substring: str = "xt=urn:btih:661d5b6a5434cb8e230cd5385db7bfa3e30ff084",
+    offsets: Iterable[int] = (0, 1, 5),  # 0=first(anchor), 1=next, 6=7th from anchor
+    timeout: int = 20,
+) -> list[str]:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    r = requests.get(page_url, headers=headers, timeout=timeout, allow_redirects=True)
+    r.raise_for_status()
+
+    soup = BeautifulSoup(r.text, "lxml")
+
+    wrapper = soup.select_one("div.wrapper")
+    if not wrapper:
+        raise RuntimeError("Could not find div.wrapper in fetched HTML")
+
+    magnets: list[str] = [
+        (a.get("href") or "").strip()
+        for a in wrapper.select('a[href^="magnet:"]')
+        if (a.get("href") or "").strip()
+    ]
+    if not magnets:
+        raise RuntimeError("Found 0 magnet links in div.wrapper")
+
+    # Find anchor index
+    anchor_idx = next((i for i, m in enumerate(magnets) if anchor_substring in m), None)
+    if anchor_idx is None:
+        # Optional fallback: try by visible text if the infohash changes but text is stable
+        # (You can remove this block if you want strict matching only.)
+        for i, a in enumerate(wrapper.select('a[href^="magnet:"]')):
+            if "Update ROMs" in a.get_text(" ", strip=True):
+                anchor_idx = i
+                break
+
+    if anchor_idx is None:
+        raise RuntimeError(
+            f"Anchor magnet not found. Tried substring: {anchor_substring!r}. "
+            f"Total magnets found: {len(magnets)}"
+        )
+
+    out: list[str] = []
+    for off in offsets:
+        if off < 0:
+            raise ValueError(f"Offset must be >= 0, got {off}")
+        idx = anchor_idx + off
+        if idx >= len(magnets):
+            raise IndexError(
+                f"Requested offset {off} (magnet #{off+1} from anchor), but only "
+                f"{len(magnets) - anchor_idx} magnet(s) exist from the anchor onward "
+                f"({len(magnets)} total)."
+            )
+        out.append(magnets[idx])
+
+    return "\n".join(out)
+
+
 def load_config(path: str) -> None:
     """
     Load settings from config.ini.
@@ -128,7 +192,7 @@ def load_config(path: str) -> None:
             logf(False, "qBittorrent enabled but username/password missing; disabling.")
             QB_ENABLED = False
 
-    QB_URL_TEMPLATE = extract_nth_anchor_urls("https://pleasuredome.github.io/pleasuredome/mame/index.html")
+    QB_URL_TEMPLATE = extract_magnets_from_anchor()
 
     # Normalize paths
     DATA_DIR = os.path.abspath(DATA_DIR)
@@ -196,6 +260,7 @@ def qb_add_urls(urls: list[str]) -> bool:
             payload["category"] = QB_CATEGORY
 
         r = s.post(f"{base}/api/v2/torrents/add", data=payload, timeout=15)
+        logf(True, f"qBittorrent add response: HTTP {r.status_code} body={r.text!r}")
         if r.status_code != 200:
             logf(False, f"qBittorrent add failed: HTTP {r.status_code} body={r.text[:200]}")
             return False
@@ -211,60 +276,6 @@ def qb_add_urls(urls: list[str]) -> bool:
     except Exception as e:
         logf(False, f"qBittorrent error: {e}")
         return False
-
-
-def extract_nth_anchor_urls(
-    page_url: str,
-    positions: tuple[int, ...] = (5, 6, 11),
-    *,
-    timeout: int | float = 20,
-    user_agent: str = "Mozilla/5.0 (compatible; LinkExtractor/1.0)",
-) -> list[str]:
-    """
-    Fetch `page_url`, parse HTML, and return the Nth <a href="..."> links (1-based) as absolute URLs.
-
-    Behavior:
-      - Counts <a href="..."> in DOM order.
-      - Resolves relative hrefs to absolute via urljoin(page_url, href).
-      - Filters to http/https only (skips mailto:, javascript:, fragments, etc.)
-      - Returns URLs in the same order as `positions`.
-
-    Raises:
-      - requests.HTTPError on non-200 responses
-      - IndexError if a requested position doesn't exist after filtering
-      - requests.RequestException on network issues
-    """
-    def is_http(u: str) -> bool:
-        try:
-            return urlparse(u).scheme in ("http", "https")
-        except Exception:
-            return False
-
-    headers = {"User-Agent": user_agent}
-    r = requests.get(page_url, headers=headers, timeout=timeout)
-    r.raise_for_status()
-
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    links: list[str] = []
-    for a in soup.find_all("a", href=True):
-        href = (a.get("href") or "").strip()
-        if not href:
-            continue
-        abs_url = urljoin(page_url, href)
-        if is_http(abs_url):
-            links.append(abs_url)
-
-    out: list[str] = []
-    for pos in positions:
-        idx = pos - 1
-        if idx < 0 or idx >= len(links):
-            raise IndexError(
-                f"Requested link #{pos}, but only found {len(links)} http(s) <a href> links."
-            )
-        out.append(links[idx])
-
-    return out
 
 
 def send_pushover(title: str, message: str, priority: Optional[int] = None) -> None:

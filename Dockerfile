@@ -19,7 +19,8 @@ COPY templates ./templates
 RUN pip install --no-cache-dir \
       flask \
       requests \
-      beautifulsoup4
+      beautifulsoup4 \
+      lxml
 
 # Ensure log directory exists in container
 RUN mkdir -p /var/log
