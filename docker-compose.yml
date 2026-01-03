@@ -25,6 +25,8 @@ services:
       # Log file for all checkers + web dashboard
       - /var/log/arcadecheck.log:/var/log/arcadecheck.log
 
+      - /mnt/downloads:/downloads
+
     # If you want health status exposed via docker ps / docker inspect
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5000/health || exit 1"]

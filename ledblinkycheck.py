@@ -20,11 +20,14 @@ This script is intended to be run periodically (cron / scheduler / Docker) and
 share config + data_dir + log_path with the arcade web dashboard.
 """
 
+from __future__ import annotations
 import os
 import sys
 import re
 import configparser
 from datetime import datetime
+from pathlib import Path
+from urllib.parse import urljoin, urlparse
 from typing import Optional, Tuple
 
 import requests
@@ -162,6 +165,83 @@ def logf(ok: bool, message: str) -> None:
     except OSError as e:
         print(f"ERROR: unable to write log file '{LOG_PATH}': {e}",
               file=sys.stderr)
+
+
+def download_ledblinky(
+    page_url: str = "https://www.ledblinky.net/Download.htm",
+    dest_dir: str | os.PathLike = "/downloads",
+    *,
+    timeout: int | float = 30,
+    user_agent: str = "Mozilla/5.0 (compatible; ArcadeUpdateMonitor/1.0)",
+) -> str:
+    """
+    Scrapes LEDBlinky Download page and downloads the latest LEDBlinky setup EXE
+    (the 'latest LEDBlinky Setup' link near the top of the page).
+
+    Returns: absolute path to downloaded file.
+    Raises: RuntimeError / requests exceptions on failures.
+    """
+    headers = {"User-Agent": user_agent}
+
+    # 1) Fetch the downloads page
+    r = requests.get(page_url, headers=headers, timeout=timeout)
+    r.raise_for_status()
+
+    # 2) Parse links
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    def is_http(url: str) -> bool:
+        try:
+            return urlparse(url).scheme in ("http", "https")
+        except Exception:
+            return False
+
+    anchors = []
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if not href:
+            continue
+        abs_url = urljoin(page_url, href)
+        if is_http(abs_url):
+            anchors.append((abs_url, (a.get_text() or "").strip()))
+
+    if not anchors:
+        raise RuntimeError("No links found on LEDBlinky downloads page.")
+
+    # 3) Prefer the installer link
+    # Heuristic: link URL contains "LEDBlinkySetup" and ends with .exe
+    installer_url = None
+    for url, text in anchors:
+        if "ledblinksetup" in url.lower() and url.lower().endswith(".exe"):
+            installer_url = url
+            break
+
+    # Fallback: first .exe link on the page
+    if installer_url is None:
+        for url, text in anchors:
+            if url.lower().endswith(".exe"):
+                installer_url = url
+                break
+
+    if installer_url is None:
+        raise RuntimeError("Could not find an .exe installer link on LEDBlinky downloads page.")
+
+    # 4) Download the EXE
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = Path(urlparse(installer_url).path).name or "LEDBlinkySetup.exe"
+    out_path = (dest_dir / filename).resolve()
+
+    with requests.get(installer_url, headers=headers, timeout=timeout, stream=True) as dl:
+        dl.raise_for_status()
+        with open(out_path, "wb") as f:
+            for chunk in dl.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+
+    os.chmod(out_path, 0o666)
+    return str(out_path)
 
 
 def send_pushover(title: str, message: str, priority: Optional[int] = None) -> None:
@@ -371,6 +451,8 @@ def main() -> int:
             f"New LEDBlinky version {new_version} is available.",
         )
 
+    dresult = download_ledblinky()
+    logf(True, f"LEDBlinky is downloading to {dresult}")
     return 0
 
 
