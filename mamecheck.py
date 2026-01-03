@@ -21,13 +21,13 @@ This script is intended to be run periodically (e.g. via cron or a scheduler),
 and to share the same config.ini and data_dir structure as the arcade web dashboard.
 """
 
+from __future__ import annotations
 import os
 import sys
 import re
 import configparser
 from datetime import datetime
 from typing import Optional, Tuple
-from __future__ import annotations
 
 from urllib.parse import urljoin, urlparse
 
