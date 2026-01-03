@@ -17,7 +17,7 @@ import configparser
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from flask import Flask, request, render_template, abort
+from flask import Flask, request, render_template, abort, redirect, url_for
 
 # -----------------------------------------------------------------------------
 # Config loading
@@ -232,7 +232,6 @@ def load_log_text() -> str:
         return ""
 
     tail = lines[-LOG_LINES:]
-    # Join with newline so it looks like a normal log file
     return "\n".join(tail)
 
 
@@ -255,7 +254,6 @@ def limit_remote_addr():
 
     remote = request.remote_addr
     if remote not in ALLOWED_HOSTS:
-        # Simple 403 if not allowed
         abort(403, description="You're not allowed to access this resource")
 
 
@@ -278,12 +276,28 @@ def index():
         title=TITLE,
         apps=apps,
         lastcheck=lastcheck,
-        log=log_text,        # <-- this is what your template should use
+        log=log_text,
         log_lines=LOG_LINES,
         log_path=LOG_PATH,
     )
 
 
+@app.route("/clear-log", methods=["POST"])
+def clear_log():
+    """
+    Clear the contents of the log file, then redirect back to the dashboard.
+    """
+    try:
+        # Truncate the file to zero length (create if missing)
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        with open(LOG_PATH, "w", encoding="utf-8"):
+            pass
+    except OSError:
+        # If something goes wrong, just ignore; the next page load will show the old log
+        pass
+
+    return redirect(url_for("index"))
+
+
 if __name__ == "__main__":
-    # For debugging outside Docker
     app.run(host="0.0.0.0", port=FLASK_PORT, debug=True)

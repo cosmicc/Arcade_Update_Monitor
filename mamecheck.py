@@ -21,12 +21,15 @@ This script is intended to be run periodically (e.g. via cron or a scheduler),
 and to share the same config.ini and data_dir structure as the arcade web dashboard.
 """
 
+from __future__ import annotations
 import os
 import sys
 import re
 import configparser
 from datetime import datetime
 from typing import Optional, Tuple
+
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -52,39 +55,28 @@ PUSHOVER_TOKEN: Optional[str] = None
 PUSHOVER_USER: Optional[str] = None
 PUSHOVER_DEVICE: Optional[str] = None
 PUSHOVER_PRIORITY: int = 0
-PUSHOVER_ENABLED: bool = False
+PUSHOVER_ENABLED: bool = True
 NOTIFY_ON_UPDATE: bool = True
 NOTIFY_ON_ERROR: bool = True
+
+QB_ENABLED = False
+QB_HOST = "10.100.10.10"
+QB_PORT = 8080
+QB_USER = None
+QB_PASS = None
+QB_CATEGORY = "games"
+QB_PAUSED = False
+QB_URL_TEMPLATE = ""
 
 
 def load_config(path: str) -> None:
     """
     Load settings from config.ini.
-
-    Relevant sections/keys:
-
-        [web]
-        data_dir        = /data/arcade_app
-        lastcheck_file  = lastcheck
-        log_path        = /var/log/arcadecheck.log
-
-        [mame]
-        url             = https://pleasuredome.github.io/pleasuredome/mame/index.html
-        version_file    = mame.ver
-        label           = MAME
-        notify_on_update = true
-        notify_on_error  = true
-
-        [pushover]
-        token    = <app token>
-        user     = <user key>
-        device   =
-        priority = 0
-        enabled  = true
     """
     global MAME_URL, DATA_DIR, VERSION_FILE, LASTCHECK_FILE, LOG_PATH, MAME_LABEL
     global PUSHOVER_TOKEN, PUSHOVER_USER, PUSHOVER_DEVICE, PUSHOVER_PRIORITY
     global PUSHOVER_ENABLED, NOTIFY_ON_UPDATE, NOTIFY_ON_ERROR
+    global QB_ENABLED, QB_HOST, QB_PORT, QB_USER, QB_PASS, QB_CATEGORY, QB_PAUSED, QB_URL_TEMPLATE
 
     parser = configparser.ConfigParser()
     read_files = parser.read(path)
@@ -121,6 +113,22 @@ def load_config(path: str) -> None:
         )
     else:
         PUSHOVER_ENABLED = False
+
+    if parser.has_section("qbittorrent"):
+        qb = parser["qbittorrent"]
+        QB_ENABLED = qb.getboolean("enabled", False)
+        QB_HOST = qb.get("host", QB_HOST).strip()
+        QB_PORT = qb.getint("port", QB_PORT)
+        QB_USER = qb.get("username", "").strip() or None
+        QB_PASS = qb.get("password", "").strip() or None
+        QB_CATEGORY = qb.get("category", "").strip()
+        QB_PAUSED = qb.getboolean("paused", False)
+        QB_URL_TEMPLATE = qb.get("url_template", "").strip()
+        if QB_ENABLED and not (QB_USER and QB_PASS):
+            logf(False, "qBittorrent enabled but username/password missing; disabling.")
+            QB_ENABLED = False
+
+    QB_URL_TEMPLATE = extract_nth_anchor_urls("https://pleasuredome.github.io/pleasuredome/mame/index.html")
 
     # Normalize paths
     DATA_DIR = os.path.abspath(DATA_DIR)
@@ -164,6 +172,100 @@ def logf(ok: bool, message: str) -> None:
         print(f"ERROR: unable to write log file '{LOG_PATH}': {e}",
               file=sys.stderr)
 
+def qb_add_urls(urls: list[str]) -> bool:
+    """Add one or more torrent URLs/magnets to qBittorrent. Returns True on success."""
+    if not QB_ENABLED:
+        return False
+
+    base = f"http://{QB_HOST}:{QB_PORT}"
+    s = requests.Session()
+
+    try:
+        r = s.post(f"{base}/api/v2/auth/login",
+                   data={"username": QB_USER, "password": QB_PASS},
+                   timeout=10)
+        if r.status_code != 200 or r.text.strip() != "Ok.":
+            logf(False, f"qBittorrent login failed: HTTP {r.status_code} body={r.text[:120]}")
+            return False
+
+        payload = {
+            "urls": "\n".join(urls),
+            "paused": "true" if QB_PAUSED else "false",
+        }
+        if QB_CATEGORY:
+            payload["category"] = QB_CATEGORY
+
+        r = s.post(f"{base}/api/v2/torrents/add", data=payload, timeout=15)
+        if r.status_code != 200:
+            logf(False, f"qBittorrent add failed: HTTP {r.status_code} body={r.text[:200]}")
+            return False
+
+        # qBittorrent often returns plain text like "Ok." or "Fails."
+        if "fail" in r.text.lower():
+            logf(False, f"qBittorrent add returned failure: {r.text[:200]}")
+            return False
+
+        logf(True, f"qBittorrent: added {len(urls)} URL(s) successfully.")
+        return True
+
+    except Exception as e:
+        logf(False, f"qBittorrent error: {e}")
+        return False
+
+
+def extract_nth_anchor_urls(
+    page_url: str,
+    positions: tuple[int, ...] = (5, 6, 11),
+    *,
+    timeout: int | float = 20,
+    user_agent: str = "Mozilla/5.0 (compatible; LinkExtractor/1.0)",
+) -> list[str]:
+    """
+    Fetch `page_url`, parse HTML, and return the Nth <a href="..."> links (1-based) as absolute URLs.
+
+    Behavior:
+      - Counts <a href="..."> in DOM order.
+      - Resolves relative hrefs to absolute via urljoin(page_url, href).
+      - Filters to http/https only (skips mailto:, javascript:, fragments, etc.)
+      - Returns URLs in the same order as `positions`.
+
+    Raises:
+      - requests.HTTPError on non-200 responses
+      - IndexError if a requested position doesn't exist after filtering
+      - requests.RequestException on network issues
+    """
+    def is_http(u: str) -> bool:
+        try:
+            return urlparse(u).scheme in ("http", "https")
+        except Exception:
+            return False
+
+    headers = {"User-Agent": user_agent}
+    r = requests.get(page_url, headers=headers, timeout=timeout)
+    r.raise_for_status()
+
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    links: list[str] = []
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if not href:
+            continue
+        abs_url = urljoin(page_url, href)
+        if is_http(abs_url):
+            links.append(abs_url)
+
+    out: list[str] = []
+    for pos in positions:
+        idx = pos - 1
+        if idx < 0 or idx >= len(links):
+            raise IndexError(
+                f"Requested link #{pos}, but only found {len(links)} http(s) <a href> links."
+            )
+        out.append(links[idx])
+
+    return out
+
 
 def send_pushover(title: str, message: str, priority: Optional[int] = None) -> None:
     """
@@ -187,13 +289,22 @@ def send_pushover(title: str, message: str, priority: Optional[int] = None) -> N
         payload["device"] = PUSHOVER_DEVICE
 
     try:
-        resp = requests.post("https://api.pushover.net/1/messages.json",
-                             data=payload, timeout=10)
+        resp = requests.post("https://api.pushover.net/1/messages.json", data=payload, timeout=10)
         if resp.status_code != 200:
-            logf(
-                False,
-                f"Pushover API error {resp.status_code}: {resp.text[:200]}",
-            )
+            logf(False, f"Pushover API error {resp.status_code}: {resp.text[:200]}")
+            return
+
+        # extra visibility
+        try:
+            j = resp.json()
+        except Exception:
+            logf(False, f"Pushover: HTTP 200 but non-JSON response: {resp.text[:200]}")
+            return
+
+        if j.get("status") != 1:
+            logf(False, f"Pushover: HTTP 200 but status != 1: {j}")
+        else:
+            logf(True, f"Pushover: sent OK (title={title!r})")
     except Exception as e:
         logf(False, f"Failed to send Pushover notification: {e}")
 
@@ -373,6 +484,17 @@ def main() -> int:
             "New MAME Version",
             f"New MAME update ROMs version {to_ver} is available (from {from_ver}).",
         )
+
+    if QB_ENABLED and QB_URL_TEMPLATE:
+        url = QB_URL_TEMPLATE.format(version=to_ver)
+        ok = qb_add_urls([url])
+        if NOTIFY_ON_UPDATE:
+            send_pushover(
+                "MAME Download Queued" if ok else "MAME Download Queue Failed",
+                f"qBittorrent: {'queued' if ok else 'failed to queue'} download for MAME {to_ver}.",
+            )
+    else:
+        logf(True, "qBittorrent: not enabled or url_template not set; skipping queue.")
 
     return 0
 
