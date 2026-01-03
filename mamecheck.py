@@ -69,6 +69,46 @@ QB_PAUSED = False
 QB_URL_TEMPLATE = ""
 
 
+def extract_nth_anchor_urls(
+    page_url: str,
+    positions: tuple[int, ...] = (5, 6, 11),
+    *,
+    timeout: int | float = 20,
+    user_agent: str = "Mozilla/5.0 (compatible; LinkExtractor/1.0)",
+) -> list[str]:
+    def is_http(u: str) -> bool:
+        try:
+            return urlparse(u).scheme in ("http", "https")
+        except Exception:
+            return False
+
+    headers = {"User-Agent": user_agent}
+    r = requests.get(page_url, headers=headers, timeout=timeout)
+    r.raise_for_status()
+
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    links: list[str] = []
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if not href:
+            continue
+        abs_url = urljoin(page_url, href)
+        if is_http(abs_url):
+            links.append(abs_url)
+
+    out: list[str] = []
+    for pos in positions:
+        idx = pos - 1
+        if idx < 0 or idx >= len(links):
+            raise IndexError(
+                f"Requested link #{pos}, but only found {len(links)} http(s) <a href> links."
+            )
+        out.append(links[idx])
+
+    return "\n".join(out)
+
+
 def load_config(path: str) -> None:
     """
     Load settings from config.ini.
@@ -211,60 +251,6 @@ def qb_add_urls(urls: list[str]) -> bool:
     except Exception as e:
         logf(False, f"qBittorrent error: {e}")
         return False
-
-
-def extract_nth_anchor_urls(
-    page_url: str,
-    positions: tuple[int, ...] = (5, 6, 11),
-    *,
-    timeout: int | float = 20,
-    user_agent: str = "Mozilla/5.0 (compatible; LinkExtractor/1.0)",
-) -> list[str]:
-    """
-    Fetch `page_url`, parse HTML, and return the Nth <a href="..."> links (1-based) as absolute URLs.
-
-    Behavior:
-      - Counts <a href="..."> in DOM order.
-      - Resolves relative hrefs to absolute via urljoin(page_url, href).
-      - Filters to http/https only (skips mailto:, javascript:, fragments, etc.)
-      - Returns URLs in the same order as `positions`.
-
-    Raises:
-      - requests.HTTPError on non-200 responses
-      - IndexError if a requested position doesn't exist after filtering
-      - requests.RequestException on network issues
-    """
-    def is_http(u: str) -> bool:
-        try:
-            return urlparse(u).scheme in ("http", "https")
-        except Exception:
-            return False
-
-    headers = {"User-Agent": user_agent}
-    r = requests.get(page_url, headers=headers, timeout=timeout)
-    r.raise_for_status()
-
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    links: list[str] = []
-    for a in soup.find_all("a", href=True):
-        href = (a.get("href") or "").strip()
-        if not href:
-            continue
-        abs_url = urljoin(page_url, href)
-        if is_http(abs_url):
-            links.append(abs_url)
-
-    out: list[str] = []
-    for pos in positions:
-        idx = pos - 1
-        if idx < 0 or idx >= len(links):
-            raise IndexError(
-                f"Requested link #{pos}, but only found {len(links)} http(s) <a href> links."
-            )
-        out.append(links[idx])
-
-    return out
 
 
 def send_pushover(title: str, message: str, priority: Optional[int] = None) -> None:
