@@ -4,11 +4,13 @@
     <meta charset="utf-8">
     <title>{{ title or "Arcade App Version Monitor" }}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- Auto refresh every 60 seconds -->
+    <meta http-equiv="refresh" content="60">
 
     <style>
+        /* Basic layout / theme */
         body {
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-                         sans-serif;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             background-color: #121212;
             color: #e0e0e0;
             margin: 0;
@@ -32,21 +34,27 @@
 
         h2 {
             font-size: 1.3rem;
-            margin-top: 24px;
+            margin-top: 4px;
         }
 
         .header {
             display: flex;
             justify-content: space-between;
-            align-items: baseline;
-            margin-bottom: 16px;
+            align-items: flex-start;
             gap: 12px;
             flex-wrap: wrap;
+            margin-bottom: 16px;
         }
 
         .header-sub {
             font-size: 0.9rem;
             color: #a0a0a0;
+            text-align: right;
+        }
+
+        .tagline {
+            font-size: 0.85rem;
+            color: #9e9e9e;
         }
 
         .card {
@@ -57,6 +65,8 @@
             margin-bottom: 18px;
             border: 1px solid #2c2c2c;
         }
+
+        /* Versions table */
 
         .apps-table {
             width: 100%;
@@ -100,7 +110,7 @@
             color: #a5d6a7;
         }
 
-        .badge-stale {
+        .badge-unknown {
             background-color: #5d4037;
             color: #ffccbc;
         }
@@ -110,8 +120,20 @@
             font-size: 0.85rem;
         }
 
-        .log-container {
-            margin-top: 8px;
+        /* Log layout */
+
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 8px;
+        }
+
+        .log-meta {
+            font-size: 0.8rem;
+            color: #9e9e9e;
+            text-align: right;
         }
 
         .log-box {
@@ -127,16 +149,31 @@
             word-wrap: break-word;
         }
 
-        .log-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: baseline;
-            gap: 12px;
+        /* Clear log button */
+
+        .btn {
+            appearance: none;
+            border: none;
+            cursor: pointer;
+            padding: 6px 12px;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
         }
 
-        .tagline {
-            font-size: 0.85rem;
-            color: #9e9e9e;
+        .btn-clear {
+            background-color: #b71c1c;
+            color: #fce4ec;
+        }
+
+        .btn-clear:hover {
+            background-color: #d32f2f;
+        }
+
+        .btn-clear:active {
+            background-color: #9a0007;
         }
 
         @media (max-width: 700px) {
@@ -147,23 +184,29 @@
             .log-box {
                 max-height: 320px;
             }
+
+            .header-sub {
+                text-align: left;
+            }
         }
     </style>
 </head>
 <body>
 <div class="page">
+
+    <!-- Header -->
     <div class="header">
         <div>
             <h1>{{ title or "Arcade App Version Monitor" }}</h1>
             <div class="tagline">
-                Tracking versions for your arcade stack and recent check activity.
+                Tracking versions for your arcade stack and showing recent check activity.
             </div>
         </div>
         {% if lastcheck %}
             <div class="header-sub">
-                Last check:
-                <strong>{{ lastcheck.timestamp }}</strong>
-                &nbsp;({{ lastcheck.elapsed }}&nbsp;by {{ lastcheck.app }})
+                <div>Last check:</div>
+                <div><strong>{{ lastcheck.timestamp }}</strong></div>
+                <div>{{ lastcheck.elapsed }} by {{ lastcheck.app }}</div>
             </div>
         {% endif %}
     </div>
@@ -188,7 +231,7 @@
                         {% if app.version %}
                             <span class="badge badge-ok">{{ app.version }}</span>
                         {% else %}
-                            <span class="badge badge-stale">unknown</span>
+                            <span class="badge badge-unknown">unknown</span>
                         {% endif %}
                     </td>
                     <td>{{ app.date or "n/a" }}</td>
@@ -199,18 +242,29 @@
         </table>
     </div>
 
-    <!-- Log card BELOW the versions -->
-    <div class="card log-container">
+    <!-- Log card (underneath versions) -->
+    <div class="card">
         <div class="log-header">
             <h2>Recent Log</h2>
-            {% if log_lines %}
-                <div class="muted">{{ log_lines }} most recent lines from {{ log_path }}</div>
-            {% endif %}
+            <div class="log-meta">
+                {% if log_path %}
+                    <div>{{ log_lines }} most recent lines from</div>
+                    <div><code>{{ log_path }}</code></div>
+                {% endif %}
+            </div>
         </div>
+
+        <!-- Clear log button -->
+        <form method="post" action="{{ url_for('clear_log') }}" style="margin-bottom: 10px;">
+            <button type="submit" class="btn btn-clear">Clear Log</button>
+        </form>
+
+        <!-- Log content -->
         <div class="log-box">
-            {{ log | safe }}
+            <pre>{{ log }}</pre>
         </div>
     </div>
+
 </div>
 </body>
 </html>
