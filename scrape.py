@@ -59,7 +59,7 @@ def main():
         sys.exit(2)
 
     url = sys.argv[1]
-    positions = (5, 6, 11)
+    positions = (1, 2, 3, 4, 5, 6, 17, 18, 19, 20, 25, 29)
 
     try:
         got = extract_nth_links(url, positions=positions)
